@@ -2,35 +2,28 @@ name: "Terraform CI/CD"
 
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
   pull_request:
-    branches: [ "main" ]
-  workflow_dispatch:
-    inputs:
-      action:
-        description: 'Choose Terraform action to execute'
-        required: true
-        default: 'apply'
-        type: choice
-        options:
-          - apply
-          - destroy
+    branches:
+      - main
 
 permissions:
-  contents: read
-  pull-requests: write
+  id-token: write      
+  contents: read      
+  pull-requests: write 
 
 jobs:
   terraform:
     name: "Terraform Execution"
     runs-on: ubuntu-latest
-    
+
     steps:
       # Step 1: Checkout repository code
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # Step 2: Authenticate to AWS using Access Keys
+        
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -38,35 +31,64 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: eu-north-1
 
-      # Step 3: Install Terraform CLI
+     
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
-      # Step 4: Check formatting
+ 
       - name: Terraform Format Check
+        id: fmt
         run: terraform fmt -check
         continue-on-error: true
 
-      # Step 5: Initialize Terraform working directory
+ 
       - name: Terraform Init
+        id: init
         run: terraform init
 
-      # Step 6: Generate Terraform execution plan
-      - name: Terraform Plan
-        run: |
-          if [ "${{ github.event.inputs.action }}" == "destroy" ]; then
-            terraform plan -destroy
-          else
-            terraform plan
-          fi
 
-      # Step 7: Apply or Destroy based on user selection
-      - name: Terraform Execution (Apply or Destroy)
-        run: |
-          if [ "${{ github.event.inputs.action }}" == "destroy" ]; then
-            echo "🔥 Running Terraform Destroy..."
-            terraform destroy -auto-approve
-          else
-            echo "🚀 Running Terraform Apply..."
-            terraform apply -auto-approve
-          fi
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate -no-color
+
+      - name: Terraform Plan
+        id: plan
+        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+        run: terraform plan -no-color -input=false
+        continue-on-error: true
+
+      - name: Post Plan to Pull Request
+        uses: actions/github-script@v7
+        if: github.event_name == 'pull_request'
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const output = `#### Terraform Format Check 🖌\`${{ steps.fmt.outcome }}\`
+            #### Terraform Initialization ⚙️\`${{ steps.init.outcome }}\`
+            #### Terraform Validation 🤖\`${{ steps.validate.outcome }}\`
+            #### Terraform Plan 📖\`${{ steps.plan.outcome }}\`
+
+            <details><summary>Show Plan Output</summary>
+
+            \`\`\`hcl
+            ${{ steps.plan.outputs.stdout }}
+            \`\`\`
+
+            </details>
+
+            *Pushed by: @${{ github.actor }} in #${{ github.event.number }}*`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+
+      - name: Evaluate Plan Result
+        if: steps.plan.outcome == 'failure'
+        run: exit 1
+
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: terraform apply -auto-approve -input=false
