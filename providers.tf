@@ -1,4 +1,3 @@
-
 terraform {
   required_version = ">= 1.0"
 
@@ -7,8 +6,8 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
-    }
   }
+}
 
 # Provider block belongs OUTSIDE the terraform {} block
 provider "aws" {
